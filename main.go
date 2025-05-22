@@ -58,32 +58,6 @@ func (cfg *apiConfig) handlerResetMetrics(w http.ResponseWriter, r *http.Request
 	w.Write([]byte("Hits reset to 0"))
 }
 
-func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cfg.fileserverHits.Add(1)
-		next.ServeHTTP(w, r)
-	})
-}
-
-func respondWithError(w http.ResponseWriter, code int, msg string) {
-	type invalid struct {
-		Error string `json:"error"`
-	}
-	myerr := invalid{Error: msg}
-	respondWithJSON(w, code, myerr)
-}
-
-func respondWithJSON(w http.ResponseWriter, code int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	dat, err := json.Marshal(payload)
-	if err != nil {
-		log.Printf("error marshalling json")
-		return
-	}
-	w.Write(dat)
-}
-
 func handlerValidate(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Body string `json:"body"`
