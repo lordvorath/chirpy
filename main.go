@@ -92,7 +92,7 @@ func handlerValidate(w http.ResponseWriter, r *http.Request) {
 	params := parameters{}
 	err := decoder.Decode(&params)
 	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Something went wrong")
+		respondWithError(w, http.StatusInternalServerError, "Something went wrong")
 		return
 	}
 	if len(params.Body) > 140 {
@@ -114,6 +114,5 @@ func handlerValidate(w http.ResponseWriter, r *http.Request) {
 	type valid struct {
 		CleanedBody string `json:"cleaned_body"`
 	}
-	myresp := valid{CleanedBody: cleaned_string}
-	respondWithJSON(w, http.StatusOK, myresp)
+	respondWithJSON(w, http.StatusOK, valid{CleanedBody: cleaned_string})
 }
