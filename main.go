@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync/atomic"
 )
 
@@ -19,6 +21,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(filepathRoot)))))
 	mux.HandleFunc("GET /api/healthz", handlerReadiness)
+	mux.HandleFunc("POST /api/validate_chirp", handlerValidate)
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerResetMetrics)
 
@@ -60,4 +63,57 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 		cfg.fileserverHits.Add(1)
 		next.ServeHTTP(w, r)
 	})
+}
+
+func respondWithError(w http.ResponseWriter, code int, msg string) {
+	type invalid struct {
+		Error string `json:"error"`
+	}
+	myerr := invalid{Error: msg}
+	respondWithJSON(w, code, myerr)
+}
+
+func respondWithJSON(w http.ResponseWriter, code int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	dat, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("error marshalling json")
+		return
+	}
+	w.Write(dat)
+}
+
+func handlerValidate(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Body string `json:"body"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Something went wrong")
+		return
+	}
+	if len(params.Body) > 140 {
+		respondWithError(w, http.StatusBadRequest, "Chirp is too long")
+		return
+	}
+
+	cleaned := make([]string, 0)
+	for _, word := range strings.Fields(params.Body) {
+		if strings.EqualFold(word, "kerfuffle") ||
+			strings.EqualFold(word, "sharbert") ||
+			strings.EqualFold(word, "fornax") {
+			word = "****"
+		}
+		cleaned = append(cleaned, word)
+	}
+	cleaned_string := strings.Join(cleaned, " ")
+
+	type valid struct {
+		CleanedBody string `json:"cleaned_body"`
+	}
+	myresp := valid{CleanedBody: cleaned_string}
+	respondWithJSON(w, http.StatusOK, myresp)
 }
