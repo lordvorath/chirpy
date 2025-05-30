@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/lordvorath/chirpy/internal/database"
@@ -40,8 +41,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(filepathRoot)))))
 	mux.HandleFunc("GET /api/healthz", handlerReadiness)
-	mux.HandleFunc("POST /api/validate_chirp", handlerValidate)
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
+	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
 
@@ -86,19 +87,20 @@ func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("Hits reset to 0"))
 }
 
-func handlerValidate(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
-		Body string `json:"body"`
+		Body   string    `json:"body"`
+		UserID uuid.UUID `json:"user_id"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	params := parameters{}
 	err := decoder.Decode(&params)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Something went wrong")
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Something went wrong: %v", err))
 		return
 	}
 	if len(params.Body) > 140 {
-		respondWithError(w, http.StatusBadRequest, "Chirp is too long")
+		respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Chirp is too long"))
 		return
 	}
 
@@ -112,11 +114,18 @@ func handlerValidate(w http.ResponseWriter, r *http.Request) {
 		cleaned = append(cleaned, word)
 	}
 	cleaned_string := strings.Join(cleaned, " ")
-
-	type valid struct {
-		CleanedBody string `json:"cleaned_body"`
+	newChirpParams := database.CreateChirpParams{
+		Body:   cleaned_string,
+		UserID: params.UserID,
 	}
-	respondWithJSON(w, http.StatusOK, valid{CleanedBody: cleaned_string})
+
+	newChirp, err := cfg.queries.CreateChirp(r.Context(), newChirpParams)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Failed to create chirp: %v", err))
+		return
+	}
+
+	respondWithJSON(w, http.StatusCreated, newChirp)
 }
 
 func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) {
