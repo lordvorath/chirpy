@@ -43,6 +43,8 @@ func main() {
 	mux.HandleFunc("GET /api/healthz", handlerReadiness)
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
 	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
+	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)
+	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChirpByID)
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
 
@@ -81,6 +83,10 @@ func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
 	err := cfg.queries.DeleteAllUsers(r.Context())
 	if err != nil {
 		log.Printf("failed to delete users: %s", err)
+	}
+	err = cfg.queries.DeleteAllChirps(r.Context())
+	if err != nil {
+		log.Printf("failed to delete chirps: %s", err)
 	}
 	cfg.fileserverHits.Store(0)
 	w.WriteHeader(http.StatusOK)
@@ -126,6 +132,35 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 	}
 
 	respondWithJSON(w, http.StatusCreated, newChirp)
+}
+
+func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
+	chirps, err := cfg.queries.GetAllChirps(r.Context())
+	if err != nil {
+		respondWithError(w, http.StatusForbidden, fmt.Sprintf("Error retrieving all chirps: %v", err))
+		return
+	}
+	respondWithJSON(w, http.StatusOK, chirps)
+}
+
+func (cfg *apiConfig) handlerGetChirpByID(w http.ResponseWriter, r *http.Request) {
+	chirpID := r.PathValue("chirpID")
+	if chirpID == "" {
+		respondWithError(w, http.StatusNotFound, "Malformed request")
+		return
+	}
+	uid, err := uuid.Parse(chirpID)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, fmt.Sprintf("Bad chirp UUID: %v", err))
+		return
+	}
+	chirp, err := cfg.queries.GetChirpByID(r.Context(), uid)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to retrieve chirp: %v", err))
+		return
+	}
+	respondWithJSON(w, http.StatusOK, chirp)
+
 }
 
 func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) {
