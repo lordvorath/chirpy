@@ -9,10 +9,12 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
+	"github.com/lordvorath/chirpy/internal/auth"
 	"github.com/lordvorath/chirpy/internal/database"
 )
 
@@ -20,6 +22,14 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	queries        *database.Queries
 	platform       string
+}
+
+type User struct {
+	ID        uuid.UUID `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Email     string    `json:"email"`
+	Password  string    `json:"-"`
 }
 
 func main() {
@@ -42,6 +52,7 @@ func main() {
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", http.FileServer(http.Dir(filepathRoot)))))
 	mux.HandleFunc("GET /api/healthz", handlerReadiness)
 	mux.HandleFunc("POST /api/users", apiCfg.handlerCreateUser)
+	mux.HandleFunc("POST /api/login", apiCfg.handlerLogin)
 	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChirpByID)
@@ -164,18 +175,62 @@ func (cfg *apiConfig) handlerGetChirpByID(w http.ResponseWriter, r *http.Request
 }
 
 func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) {
-	userParams := struct {
-		Email string `json:"email"`
+	reqBody := struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}{}
-	err := json.NewDecoder(r.Body).Decode(&userParams)
+	err := json.NewDecoder(r.Body).Decode(&reqBody)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Couldn't decode parameters: %s", err))
 		return
 	}
-	usr, err := cfg.queries.CreateUser(r.Context(), userParams.Email)
+	userParams := database.CreateUserParams{
+		Email:          reqBody.Email,
+		HashedPassword: reqBody.Password,
+	}
+	userParams.HashedPassword, err = auth.HashPassword(reqBody.Password)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Couldn't hash the password: %s", err))
+	}
+	usr, err := cfg.queries.CreateUser(r.Context(), userParams)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Couldn't create user: %s", err))
 		return
 	}
-	respondWithJSON(w, http.StatusCreated, usr)
+	nuser := User{
+		ID:        usr.ID,
+		CreatedAt: usr.CreatedAt,
+		UpdatedAt: usr.UpdatedAt,
+		Email:     usr.Email,
+	}
+	respondWithJSON(w, http.StatusCreated, nuser)
+}
+
+func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
+	reqBody := struct {
+		Password string `json:"password"`
+		Email    string `json:"email"`
+	}{}
+	err := json.NewDecoder(r.Body).Decode(&reqBody)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Couldn't decode parameters: %s", err))
+		return
+	}
+	usr, err := cfg.queries.GetUserByEmail(r.Context(), reqBody.Email)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't find user")
+		return
+	}
+	err = auth.CheckPasswordHash(usr.HashedPassword, reqBody.Password)
+	if err != nil {
+		respondWithJSON(w, http.StatusUnauthorized, fmt.Sprintf("Incorrect email or password: %s", err))
+		return
+	}
+	nuser := User{
+		ID:        usr.ID,
+		Email:     usr.Email,
+		CreatedAt: usr.CreatedAt,
+		UpdatedAt: usr.UpdatedAt,
+	}
+	respondWithJSON(w, http.StatusOK, nuser)
 }
