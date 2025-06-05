@@ -22,6 +22,7 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 	queries        *database.Queries
 	platform       string
+	secret         string
 }
 
 type User struct {
@@ -36,6 +37,7 @@ func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
 	platform := os.Getenv("PLATFORM")
+	secret := os.Getenv("SECRET")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Fatal("failed to open db connection")
@@ -46,6 +48,7 @@ func main() {
 		fileserverHits: atomic.Int32{},
 		queries:        database.New(db),
 		platform:       platform,
+		secret:         secret,
 	}
 
 	mux := http.NewServeMux()
@@ -117,7 +120,21 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if len(params.Body) > 140 {
-		respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Chirp is too long"))
+		respondWithError(w, http.StatusBadRequest, "Chirp is too long")
+		return
+	}
+
+	/////////////
+	fmt.Printf("HEADER: %v\n", r.Header)
+	//////////////
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Request is missing a JWT: %s", err))
+		return
+	}
+	userid, err := auth.ValidateJWT(token, cfg.secret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Invalid JWT: %s", err))
 		return
 	}
 
@@ -133,7 +150,7 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 	cleaned_string := strings.Join(cleaned, " ")
 	newChirpParams := database.CreateChirpParams{
 		Body:   cleaned_string,
-		UserID: params.UserID,
+		UserID: userid,
 	}
 
 	newChirp, err := cfg.queries.CreateChirp(r.Context(), newChirpParams)
@@ -208,8 +225,9 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 
 func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 	reqBody := struct {
-		Password string `json:"password"`
-		Email    string `json:"email"`
+		Password         string `json:"password"`
+		Email            string `json:"email"`
+		ExpiresInSeconds int    `json:"expires_in_seconds"`
 	}{}
 	err := json.NewDecoder(r.Body).Decode(&reqBody)
 	if err != nil {
@@ -226,11 +244,26 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 		respondWithJSON(w, http.StatusUnauthorized, fmt.Sprintf("Incorrect email or password: %s", err))
 		return
 	}
-	nuser := User{
+	expiresIn := time.Hour
+	if reqBody.ExpiresInSeconds >= 1 || reqBody.ExpiresInSeconds <= 3600 {
+		expiresIn = time.Duration(time.Duration(reqBody.ExpiresInSeconds).Seconds())
+	}
+	token, err := auth.MakeJWT(usr.ID, cfg.secret, expiresIn)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Couldn't make JWT: %s", err))
+	}
+	nuser := struct {
+		ID        uuid.UUID `json:"id"`
+		CreatedAt time.Time `json:"created_at"`
+		UpdatedAt time.Time `json:"updated_at"`
+		Email     string    `json:"email"`
+		Token     string    `json:"token"`
+	}{
 		ID:        usr.ID,
 		Email:     usr.Email,
 		CreatedAt: usr.CreatedAt,
 		UpdatedAt: usr.UpdatedAt,
+		Token:     token,
 	}
 	respondWithJSON(w, http.StatusOK, nuser)
 }
