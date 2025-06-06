@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -170,11 +171,34 @@ func (cfg *apiConfig) handlerCreateChirp(w http.ResponseWriter, r *http.Request)
 }
 
 func (cfg *apiConfig) handlerGetChirps(w http.ResponseWriter, r *http.Request) {
-	chirps, err := cfg.queries.GetAllChirps(r.Context())
-	if err != nil {
-		respondWithError(w, http.StatusForbidden, fmt.Sprintf("Error retrieving all chirps: %v", err))
-		return
+	author_id := r.URL.Query().Get("author_id")
+	var chirps []database.Chirp
+	var err error
+	if author_id == "" {
+		chirps, err = cfg.queries.GetAllChirps(r.Context())
+		if err != nil {
+			respondWithError(w, http.StatusForbidden, fmt.Sprintf("Error retrieving all chirps: %v", err))
+			return
+		}
+	} else {
+		uid, err := uuid.Parse(author_id)
+		if err != nil {
+			respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Error bad user id: %v", err))
+			return
+		}
+		chirps, err = cfg.queries.GetChirpsByAuthor(r.Context(), uid)
+		if err != nil {
+			respondWithError(w, http.StatusForbidden, fmt.Sprintf("Error retrieving chirps by author: %v", err))
+			return
+		}
 	}
+	srt := r.URL.Query().Get("sort")
+	if srt == "desc" {
+		sort.Slice(chirps, func(i, j int) bool {
+			return chirps[i].CreatedAt.After(chirps[j].CreatedAt)
+		})
+	}
+
 	respondWithJSON(w, http.StatusOK, chirps)
 }
 
