@@ -26,11 +26,12 @@ type apiConfig struct {
 }
 
 type User struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Email     string    `json:"email"`
-	Password  string    `json:"-"`
+	ID          uuid.UUID `json:"id"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	Email       string    `json:"email"`
+	Password    string    `json:"-"`
+	IsChirpyRed bool      `json:"is_chirpy_red"`
 }
 
 func main() {
@@ -65,6 +66,7 @@ func main() {
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
 	mux.HandleFunc("PUT /api/users", apiCfg.handlerUsers)
+	mux.HandleFunc("POST /api/polka/webhooks", apiCfg.handlerUpgradeUser)
 
 	srv := &http.Server{
 		Addr:    ":" + port,
@@ -220,10 +222,11 @@ func (cfg *apiConfig) handlerCreateUser(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	nuser := User{
-		ID:        usr.ID,
-		CreatedAt: usr.CreatedAt,
-		UpdatedAt: usr.UpdatedAt,
-		Email:     usr.Email,
+		ID:          usr.ID,
+		CreatedAt:   usr.CreatedAt,
+		UpdatedAt:   usr.UpdatedAt,
+		Email:       usr.Email,
+		IsChirpyRed: usr.IsChirpyRed,
 	}
 	respondWithJSON(w, http.StatusCreated, nuser)
 }
@@ -270,6 +273,7 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 		Email        string    `json:"email"`
 		Token        string    `json:"token"`
 		RefreshToken string    `json:"refresh_token"`
+		IsChirpyRed  bool      `json:"is_chirpy_red"`
 	}{
 		ID:           usr.ID,
 		Email:        usr.Email,
@@ -277,6 +281,7 @@ func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt:    usr.UpdatedAt,
 		Token:        token,
 		RefreshToken: dbtoken.Token,
+		IsChirpyRed:  usr.IsChirpyRed,
 	}
 	respondWithJSON(w, http.StatusOK, nuser)
 }
@@ -360,10 +365,11 @@ func (cfg *apiConfig) handlerUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondWithJSON(w, http.StatusOK, User{
-		ID:        usr.ID,
-		CreatedAt: usr.CreatedAt,
-		UpdatedAt: usr.UpdatedAt,
-		Email:     usr.Email,
+		ID:          usr.ID,
+		CreatedAt:   usr.CreatedAt,
+		UpdatedAt:   usr.UpdatedAt,
+		Email:       usr.Email,
+		IsChirpyRed: usr.IsChirpyRed,
 	})
 }
 
@@ -399,4 +405,33 @@ func (cfg *apiConfig) handlerDeleteChirp(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	respondWithJSON(w, http.StatusNoContent, struct{}{})
+}
+
+func (cfg *apiConfig) handlerUpgradeUser(w http.ResponseWriter, r *http.Request) {
+	reqBody := struct {
+		Event string `json:"event"`
+		Data  struct {
+			UserID string `json:"user_id"`
+		} `json:"data"`
+	}{}
+	err := json.NewDecoder(r.Body).Decode(&reqBody)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Couldn't decode parameters: %s", err))
+		return
+	}
+	if reqBody.Event != "user.upgraded" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	uid, err := uuid.Parse(reqBody.Data.UserID)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Couldn't decode user id: %s", err))
+		return
+	}
+	_, err = cfg.queries.UpgradeUser(r.Context(), uid)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, fmt.Sprintf("Couldn't find user: %s", err))
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
