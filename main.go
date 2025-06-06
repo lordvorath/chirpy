@@ -61,6 +61,7 @@ func main() {
 	mux.HandleFunc("POST /api/chirps", apiCfg.handlerCreateChirp)
 	mux.HandleFunc("GET /api/chirps", apiCfg.handlerGetChirps)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChirpByID)
+	mux.HandleFunc("DELETE /api/chirps/{chirpID}", apiCfg.handlerDeleteChirp)
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
 	mux.HandleFunc("PUT /api/users", apiCfg.handlerUsers)
@@ -188,7 +189,7 @@ func (cfg *apiConfig) handlerGetChirpByID(w http.ResponseWriter, r *http.Request
 	}
 	chirp, err := cfg.queries.GetChirpByID(r.Context(), uid)
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to retrieve chirp: %v", err))
+		respondWithError(w, http.StatusNotFound, fmt.Sprintf("Failed to retrieve chirp: %v", err))
 		return
 	}
 	respondWithJSON(w, http.StatusOK, chirp)
@@ -364,4 +365,38 @@ func (cfg *apiConfig) handlerUsers(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt: usr.UpdatedAt,
 		Email:     usr.Email,
 	})
+}
+
+func (cfg *apiConfig) handlerDeleteChirp(w http.ResponseWriter, r *http.Request) {
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Access token not found: %s", err))
+		return
+	}
+	userid, err := auth.ValidateJWT(token, cfg.secret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Invalid token: %s", err))
+		return
+	}
+	chirpID := r.PathValue("chirpID")
+	chirp_id, err := uuid.Parse(chirpID)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, fmt.Sprintf("Bad chirp UUID: %v", err))
+		return
+	}
+	chirp, err := cfg.queries.GetChirpByID(r.Context(), chirp_id)
+	if err != nil {
+		respondWithError(w, http.StatusNotFound, fmt.Sprintf("Couldn't find chirp: %s", err))
+		return
+	}
+	if chirp.UserID != userid {
+		respondWithError(w, http.StatusForbidden, "Forbidden: Wrong user")
+		return
+	}
+	err = cfg.queries.DeleteChirp(r.Context(), chirp_id)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Couldn't delete chirp: %s", err))
+		return
+	}
+	respondWithJSON(w, http.StatusNoContent, struct{}{})
 }
