@@ -63,6 +63,7 @@ func main() {
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiCfg.handlerGetChirpByID)
 	mux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
 	mux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
+	mux.HandleFunc("PUT /api/users", apiCfg.handlerUsers)
 
 	srv := &http.Server{
 		Addr:    ":" + port,
@@ -321,4 +322,46 @@ func (cfg *apiConfig) handlerRevoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respondWithJSON(w, http.StatusNoContent, struct{}{})
+}
+
+func (cfg *apiConfig) handlerUsers(w http.ResponseWriter, r *http.Request) {
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Access token not found: %s", err))
+		return
+	}
+	userid, err := auth.ValidateJWT(token, cfg.secret)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Invalid token: %s", err))
+		return
+	}
+	reqBody := struct {
+		Password string `json:"password"`
+		Email    string `json:"email"`
+	}{}
+	err = json.NewDecoder(r.Body).Decode(&reqBody)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Couldn't decode parameters: %s", err))
+		return
+	}
+	hashed_password, err := auth.HashPassword(reqBody.Password)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Couldn't hash password: %s", err))
+		return
+	}
+	usr, err := cfg.queries.UpdateUser(r.Context(), database.UpdateUserParams{
+		Email:          reqBody.Email,
+		HashedPassword: hashed_password,
+		ID:             userid,
+	})
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Couldn't update user: %s", err))
+		return
+	}
+	respondWithJSON(w, http.StatusOK, User{
+		ID:        usr.ID,
+		CreatedAt: usr.CreatedAt,
+		UpdatedAt: usr.UpdatedAt,
+		Email:     usr.Email,
+	})
 }
