@@ -23,6 +23,7 @@ type apiConfig struct {
 	queries        *database.Queries
 	platform       string
 	secret         string
+	polka_key      string
 }
 
 type User struct {
@@ -37,8 +38,6 @@ type User struct {
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
-	platform := os.Getenv("PLATFORM")
-	secret := os.Getenv("SECRET")
 	db, err := sql.Open("postgres", dbURL)
 	if err != nil {
 		log.Fatal("failed to open db connection")
@@ -48,8 +47,9 @@ func main() {
 	apiCfg := apiConfig{
 		fileserverHits: atomic.Int32{},
 		queries:        database.New(db),
-		platform:       platform,
-		secret:         secret,
+		platform:       os.Getenv("PLATFORM"),
+		secret:         os.Getenv("SECRET"),
+		polka_key:      os.Getenv("POLKA_KEY"),
 	}
 
 	mux := http.NewServeMux()
@@ -408,13 +408,22 @@ func (cfg *apiConfig) handlerDeleteChirp(w http.ResponseWriter, r *http.Request)
 }
 
 func (cfg *apiConfig) handlerUpgradeUser(w http.ResponseWriter, r *http.Request) {
+	apiKey, err := auth.GetAPIKey(r.Header)
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Couldn't find polka key: %s", err))
+		return
+	}
+	if apiKey != cfg.polka_key {
+		respondWithError(w, http.StatusUnauthorized, fmt.Sprintf("Wrong polka key: %s", err))
+		return
+	}
 	reqBody := struct {
 		Event string `json:"event"`
 		Data  struct {
 			UserID string `json:"user_id"`
 		} `json:"data"`
 	}{}
-	err := json.NewDecoder(r.Body).Decode(&reqBody)
+	err = json.NewDecoder(r.Body).Decode(&reqBody)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, fmt.Sprintf("Couldn't decode parameters: %s", err))
 		return
